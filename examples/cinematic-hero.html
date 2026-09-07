@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Cinematic 3D Hero — AETumi</title>
+<!--
+  Full-viewport cinematic 3D hero.
+  A slowly rotating displaced icosahedron sitting inside a gradient
+  environment, lit for a soft "glass crystal" glow (emissive + fog,
+  no post-processing bloom needed), with a gentle pointer-parallax camera.
+
+  POSTER FALLBACK: for production, render one frame of this scene to a
+  .jpg and set it as `background-image` on #hero so the section paints
+  instantly before WebGL boots (and stays visible if WebGL is disabled).
+
+  Three.js r160 (UMD global build from cdnjs).
+-->
+<style>
+  html, body { margin: 0; height: 100%; background: #05060a; overflow: hidden; }
+  #hero { position: fixed; inset: 0; }
+  canvas { display: block; }
+  .overlay {
+    position: fixed; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; text-align: center;
+    pointer-events: none; color: #f4f6ff;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .overlay h1 {
+    margin: 0; font-size: clamp(2.2rem, 7vw, 5.5rem); font-weight: 700;
+    letter-spacing: -0.03em; line-height: 1.02;
+    text-wrap: balance;
+  }
+  .overlay p {
+    margin: 1rem 0 0; max-width: 34ch;
+    font-size: clamp(0.95rem, 2vw, 1.2rem); color: #aab3d6;
+  }
+</style>
+</head>
+<body>
+  <div id="hero"></div>
+  <div class="overlay">
+    <h1>Worlds, rendered in the browser.</h1>
+    <p>AETumi builds AI-native 3D web experiences on Three.js &amp; WebGL.</p>
+  </div>
+
+  <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
+  <script type="module">
+import * as THREE from 'three';
+
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const mount = document.getElementById('hero');
+
+    // ---- Renderer -----------------------------------------------------------
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    mount.appendChild(renderer.domElement);
+
+    // ---- Scene + gradient environment --------------------------------------
+    const scene = new THREE.Scene();
+
+    // Vertical gradient painted to a canvas, used as the sky/background.
+    function gradientTexture(stops) {
+      const c = document.createElement('canvas');
+      c.width = 2; c.height = 256;
+      const ctx = c.getContext('2d');
+      const g = ctx.createLinearGradient(0, 0, 0, 256);
+      stops.forEach(([o, col]) => g.addColorStop(o, col));
+      ctx.fillStyle = g; ctx.fillRect(0, 0, 2, 256);
+      const tex = new THREE.CanvasTexture(c);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      return tex;
+    }
+    scene.background = gradientTexture([
+      [0, '#0a0f24'], [0.55, '#141a3a'], [1, '#2a1c4a']
+    ]);
+    scene.fog = new THREE.FogExp2(0x0a0f24, 0.11);
+
+    // ---- Camera -------------------------------------------------------------
+    const camera = new THREE.PerspectiveCamera(
+      45, window.innerWidth / window.innerHeight, 0.1, 100
+    );
+    camera.position.set(0, 0, 6);
+
+    // ---- The hero object: a displaced icosahedron ("crystal") --------------
+    const geo = new THREE.IcosahedronGeometry(1.7, 12);
+    // Displace vertices once along their normals with layered sine "noise"
+    const pos = geo.attributes.position;
+    const v = new THREE.Vector3();
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i);
+      const n = v.clone().normalize();
+      const bump =
+        0.16 * Math.sin(n.x * 4.0 + n.y * 2.0) +
+        0.10 * Math.sin(n.y * 6.0 + n.z * 3.0) +
+        0.06 * Math.sin(n.z * 9.0 + n.x * 5.0);
+      v.addScaledVector(n, bump);
+      pos.setXYZ(i, v.x, v.y, v.z);
+    }
+    geo.computeVertexNormals();
+
+    const material = new THREE.MeshStandardMaterial({
+      color: 0x5b6cff,
+      emissive: 0x1b1e55,
+      emissiveIntensity: 1.1,
+      metalness: 0.35,
+      roughness: 0.25,
+      flatShading: false
+    });
+    const crystal = new THREE.Mesh(geo, material);
+    scene.add(crystal);
+
+    // Faint wireframe shell for extra sparkle on the silhouette.
+    const shell = new THREE.Mesh(
+      geo,
+      new THREE.MeshBasicMaterial({ color: 0x8ea2ff, wireframe: true, transparent: true, opacity: 0.08 })
+    );
+    shell.scale.setScalar(1.02);
+    scene.add(shell);
+
+    // ---- Lights -------------------------------------------------------------
+    scene.add(new THREE.AmbientLight(0x2a3060, 0.9));
+    const key = new THREE.PointLight(0x7c8bff, 60, 40); key.position.set(4, 5, 5);
+    const rim = new THREE.PointLight(0xff5ea8, 45, 40); rim.position.set(-5, -2, 3);
+    const fill = new THREE.PointLight(0x38e8ff, 30, 40); fill.position.set(0, -4, -5);
+    scene.add(key, rim, fill);
+
+    // ---- Pointer parallax ---------------------------------------------------
+    const target = { x: 0, y: 0 };
+    window.addEventListener('pointermove', (e) => {
+      target.x = (e.clientX / window.innerWidth - 0.5) * 2;
+      target.y = (e.clientY / window.innerHeight - 0.5) * 2;
+    });
+
+    // ---- Animation loop -----------------------------------------------------
+    const clock = new THREE.Clock();
+    function render() {
+      const t = clock.getElapsedTime();
+      if (!reduceMotion) {
+        crystal.rotation.y = t * 0.18;
+        crystal.rotation.x = Math.sin(t * 0.15) * 0.25;
+        shell.rotation.copy(crystal.rotation);
+      }
+      // Smoothly ease the camera toward the pointer for parallax depth.
+      camera.position.x += (target.x * 0.6 - camera.position.x) * 0.04;
+      camera.position.y += (-target.y * 0.4 - camera.position.y) * 0.04;
+      camera.lookAt(0, 0, 0);
+      renderer.render(scene, camera);
+    }
+
+    if (reduceMotion) {
+      render();                         // paint a single static frame
+    } else {
+      renderer.setAnimationLoop(render);
+    }
+
+    // ---- Resize -------------------------------------------------------------
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      if (reduceMotion) render();
+    });
+  </script>
+</body>
+</html>
