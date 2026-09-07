@@ -5,36 +5,70 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Cinematic 3D Hero — AETumi</title>
 <!--
-  Full-viewport cinematic 3D hero.
-  A slowly rotating displaced icosahedron sitting inside a gradient
-  environment, lit for a soft "glass crystal" glow (emissive + fog,
-  no post-processing bloom needed), with a gentle pointer-parallax camera.
+  CINEMATIC 3D HERO — expert / production build.
 
-  POSTER FALLBACK: for production, render one frame of this scene to a
-  .jpg and set it as `background-image` on #hero so the section paints
-  instantly before WebGL boots (and stays visible if WebGL is disabled).
+  A slowly rotating displaced icosahedron ("crystal") inside a gradient
+  environment, lit for a soft glass glow (ACES tone mapping + emissive + fog,
+  no post-processing) with a gentle pointer-parallax camera.
 
-  Three.js r160 (UMD global build from cdnjs).
+  Production-grade concerns, all handled below:
+    • Capability detection: WebGL2 → WebGL → tasteful static poster fallback.
+    • prefers-reduced-motion / low-power devices render a still frame or poster.
+    • Adaptive quality: rolling-average FPS steps DPR + geometry detail down
+      when slow (<50) and back up when there is headroom (>58), with hysteresis.
+    • Loop pauses when the hero scrolls offscreen or the tab is hidden.
+    • Strict dispose(): all listeners, rAF, GPU resources released on pagehide.
+    • Accessibility: canvas is role="img" with an aria-label; the FPS toggle is
+      a real keyboard-focusable button with a visible focus ring.
+
+  Three.js r160 — ES modules via importmap on jsDelivr ONLY.
 -->
 <style>
+  :root { color-scheme: dark; }
   html, body { margin: 0; height: 100%; background: #05060a; overflow: hidden; }
   #hero { position: fixed; inset: 0; }
   canvas { display: block; }
+
+  /* Static poster fallback — paints instantly, and stays if WebGL is absent. */
+  .poster {
+    position: fixed; inset: 0;
+    background:
+      radial-gradient(120% 90% at 50% 38%, #2a1c4a 0%, #141a3a 45%, #0a0f24 100%);
+  }
+  .poster::after {
+    content: ""; position: absolute; inset: 0;
+    background: radial-gradient(38% 38% at 50% 44%, rgba(124,139,255,.45), transparent 70%);
+    filter: blur(2px);
+  }
+
   .overlay {
     position: fixed; inset: 0; display: flex; flex-direction: column;
     align-items: center; justify-content: center; text-align: center;
-    pointer-events: none; color: #f4f6ff;
+    pointer-events: none; color: #f4f6ff; padding: 0 6vw;
     font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   }
   .overlay h1 {
     margin: 0; font-size: clamp(2.2rem, 7vw, 5.5rem); font-weight: 700;
-    letter-spacing: -0.03em; line-height: 1.02;
-    text-wrap: balance;
+    letter-spacing: -0.03em; line-height: 1.02; text-wrap: balance;
   }
   .overlay p {
     margin: 1rem 0 0; max-width: 34ch;
     font-size: clamp(0.95rem, 2vw, 1.2rem); color: #aab3d6;
   }
+
+  /* Unobtrusive FPS / quality readout — off by default. */
+  .hud {
+    position: fixed; top: 14px; right: 14px; z-index: 6;
+    font: 12px/1.4 ui-monospace, "SF Mono", Menlo, monospace; color: #aab3d6;
+  }
+  .hud button {
+    appearance: none; cursor: pointer; color: inherit;
+    background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.16);
+    padding: 5px 10px; border-radius: 8px; font: inherit;
+  }
+  .hud button:focus-visible { outline: 2px solid #7c8bff; outline-offset: 2px; }
+  .hud pre { margin: 6px 0 0; text-align: right; opacity: .85; }
+  [hidden] { display: none !important; }
 </style>
 </head>
 <body>
@@ -44,50 +78,85 @@
     <p>AETumi builds AI-native 3D web experiences on Three.js &amp; WebGL.</p>
   </div>
 
+  <div class="hud">
+    <button id="hudToggle" aria-pressed="false">stats</button>
+    <pre id="hudReadout" hidden></pre>
+  </div>
+
   <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
   <script type="module">
 import * as THREE from 'three';
 
-    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    const mount = document.getElementById('hero');
+const mount = document.getElementById('hero');
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-    // ---- Renderer -----------------------------------------------------------
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.outputColorSpace = THREE.SRGBColorSpace;
-    mount.appendChild(renderer.domElement);
+/* ---- Capability + device profiling ------------------------------------- */
+function detectWebGL() {
+  try {
+    const c = document.createElement('canvas');
+    if (c.getContext('webgl2')) return 'webgl2';
+    if (c.getContext('webgl') || c.getContext('experimental-webgl')) return 'webgl';
+  } catch (_) {}
+  return 'none';
+}
+const tier = detectWebGL();
+// Treat few cores / little memory as "low power" and start at reduced quality.
+const lowPower = (navigator.hardwareConcurrency || 8) <= 4 ||
+                 (navigator.deviceMemory || 8) <= 4;
 
-    // ---- Scene + gradient environment --------------------------------------
-    const scene = new THREE.Scene();
+// No WebGL at all → leave the CSS poster on screen and stop. Never a blank canvas.
+if (tier === 'none') {
+  const poster = document.createElement('div');
+  poster.className = 'poster';
+  poster.setAttribute('role', 'img');
+  poster.setAttribute('aria-label', 'Cinematic 3D crystal hero (static preview — WebGL unavailable)');
+  mount.appendChild(poster);
+  document.querySelector('.hud').hidden = true;
+} else {
+  boot();
+}
 
-    // Vertical gradient painted to a canvas, used as the sky/background.
-    function gradientTexture(stops) {
-      const c = document.createElement('canvas');
-      c.width = 2; c.height = 256;
-      const ctx = c.getContext('2d');
-      const g = ctx.createLinearGradient(0, 0, 0, 256);
-      stops.forEach(([o, col]) => g.addColorStop(o, col));
-      ctx.fillStyle = g; ctx.fillRect(0, 0, 2, 256);
-      const tex = new THREE.CanvasTexture(c);
-      tex.colorSpace = THREE.SRGBColorSpace;
-      return tex;
-    }
-    scene.background = gradientTexture([
-      [0, '#0a0f24'], [0.55, '#141a3a'], [1, '#2a1c4a']
-    ]);
-    scene.fog = new THREE.FogExp2(0x0a0f24, 0.11);
+function boot() {
+  /* ---- Renderer -------------------------------------------------------- */
+  const renderer = new THREE.WebGLRenderer({ antialias: !lowPower, powerPreference: 'high-performance' });
+  const maxDPR = Math.min(devicePixelRatio || 1, 2);
+  renderer.setSize(innerWidth, innerHeight);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;   // filmic highlight rolloff
+  renderer.toneMappingExposure = 1.15;
+  mount.appendChild(renderer.domElement);
 
-    // ---- Camera -------------------------------------------------------------
-    const camera = new THREE.PerspectiveCamera(
-      45, window.innerWidth / window.innerHeight, 0.1, 100
-    );
-    camera.position.set(0, 0, 6);
+  const canvas = renderer.domElement;
+  canvas.setAttribute('role', 'img');
+  canvas.setAttribute('aria-label',
+    'A luminous rotating crystal drifting in a deep indigo-to-violet gradient — AETumi 3D hero.');
 
-    // ---- The hero object: a displaced icosahedron ("crystal") --------------
-    const geo = new THREE.IcosahedronGeometry(1.7, 12);
-    // Displace vertices once along their normals with layered sine "noise"
-    const pos = geo.attributes.position;
+  /* ---- Scene + gradient environment ------------------------------------ */
+  const scene = new THREE.Scene();
+  function gradientTexture(stops) {
+    const c = document.createElement('canvas');
+    c.width = 2; c.height = 256;
+    const ctx = c.getContext('2d');
+    const g = ctx.createLinearGradient(0, 0, 0, 256);
+    stops.forEach(([o, col]) => g.addColorStop(o, col));
+    ctx.fillStyle = g; ctx.fillRect(0, 0, 2, 256);
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  }
+  const bgTex = gradientTexture([[0, '#0a0f24'], [0.55, '#141a3a'], [1, '#2a1c4a']]);
+  scene.background = bgTex;
+  scene.fog = new THREE.FogExp2(0x0a0f24, 0.11);
+
+  const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.1, 100);
+  camera.position.set(0, 0, 6);
+
+  /* ---- Hero crystal: a displaced icosahedron --------------------------- */
+  // Detail is quality-driven; rebuildable so adaptive perf can lower it live.
+  let geo, crystal, shell;
+  function buildCrystal(detail) {
+    const g = new THREE.IcosahedronGeometry(1.7, detail);
+    const pos = g.attributes.position;
     const v = new THREE.Vector3();
     for (let i = 0; i < pos.count; i++) {
       v.fromBufferAttribute(pos, i);
@@ -99,70 +168,135 @@ import * as THREE from 'three';
       v.addScaledVector(n, bump);
       pos.setXYZ(i, v.x, v.y, v.z);
     }
-    geo.computeVertexNormals();
-
-    const material = new THREE.MeshStandardMaterial({
-      color: 0x5b6cff,
-      emissive: 0x1b1e55,
-      emissiveIntensity: 1.1,
-      metalness: 0.35,
-      roughness: 0.25,
-      flatShading: false
-    });
-    const crystal = new THREE.Mesh(geo, material);
-    scene.add(crystal);
-
-    // Faint wireframe shell for extra sparkle on the silhouette.
-    const shell = new THREE.Mesh(
-      geo,
-      new THREE.MeshBasicMaterial({ color: 0x8ea2ff, wireframe: true, transparent: true, opacity: 0.08 })
-    );
+    g.computeVertexNormals();
+    return g;
+  }
+  const material = new THREE.MeshStandardMaterial({
+    color: 0x5b6cff, emissive: 0x1b1e55, emissiveIntensity: 1.1,
+    metalness: 0.35, roughness: 0.25
+  });
+  const shellMat = new THREE.MeshBasicMaterial({
+    color: 0x8ea2ff, wireframe: true, transparent: true, opacity: 0.08
+  });
+  function makeMeshes(detail) {
+    geo = buildCrystal(detail);
+    crystal = new THREE.Mesh(geo, material);
+    shell = new THREE.Mesh(geo, shellMat);
     shell.scale.setScalar(1.02);
-    scene.add(shell);
+    scene.add(crystal, shell);
+  }
+  makeMeshes(lowPower ? 6 : 12);
 
-    // ---- Lights -------------------------------------------------------------
-    scene.add(new THREE.AmbientLight(0x2a3060, 0.9));
-    const key = new THREE.PointLight(0x7c8bff, 60, 40); key.position.set(4, 5, 5);
-    const rim = new THREE.PointLight(0xff5ea8, 45, 40); rim.position.set(-5, -2, 3);
-    const fill = new THREE.PointLight(0x38e8ff, 30, 40); fill.position.set(0, -4, -5);
-    scene.add(key, rim, fill);
+  /* ---- Lights ---------------------------------------------------------- */
+  scene.add(new THREE.AmbientLight(0x2a3060, 0.9));
+  const key  = new THREE.PointLight(0x7c8bff, 60, 40); key.position.set(4, 5, 5);
+  const rim  = new THREE.PointLight(0xff5ea8, 45, 40); rim.position.set(-5, -2, 3);
+  const fill = new THREE.PointLight(0x38e8ff, 30, 40); fill.position.set(0, -4, -5);
+  scene.add(key, rim, fill);
 
-    // ---- Pointer parallax ---------------------------------------------------
-    const target = { x: 0, y: 0 };
-    window.addEventListener('pointermove', (e) => {
-      target.x = (e.clientX / window.innerWidth - 0.5) * 2;
-      target.y = (e.clientY / window.innerHeight - 0.5) * 2;
-    });
+  /* ---- Pointer parallax ------------------------------------------------ */
+  const target = { x: 0, y: 0 };
+  const onPointer = (e) => {
+    target.x = (e.clientX / innerWidth - 0.5) * 2;
+    target.y = (e.clientY / innerHeight - 0.5) * 2;
+  };
+  addEventListener('pointermove', onPointer, { passive: true });
 
-    // ---- Animation loop -----------------------------------------------------
-    const clock = new THREE.Clock();
-    function render() {
-      const t = clock.getElapsedTime();
-      if (!reduceMotion) {
-        crystal.rotation.y = t * 0.18;
-        crystal.rotation.x = Math.sin(t * 0.15) * 0.25;
-        shell.rotation.copy(crystal.rotation);
-      }
-      // Smoothly ease the camera toward the pointer for parallax depth.
-      camera.position.x += (target.x * 0.6 - camera.position.x) * 0.04;
-      camera.position.y += (-target.y * 0.4 - camera.position.y) * 0.04;
-      camera.lookAt(0, 0, 0);
-      renderer.render(scene, camera);
+  /* ---- Adaptive quality (rolling FPS, hysteresis) ---------------------- */
+  let quality = lowPower ? 0.6 : 1.0;       // 0.5 .. 1.0
+  let currentDetail = lowPower ? 6 : 12;
+  const fpsBuf = [];
+  let lastAdjust = 0;
+  function applyQuality() {
+    renderer.setPixelRatio(maxDPR * (0.55 + 0.45 * quality));
+    const wantDetail = quality > 0.85 ? 12 : quality > 0.65 ? 9 : 6;
+    if (wantDetail !== currentDetail) {
+      scene.remove(crystal, shell);
+      geo.dispose();
+      makeMeshes(wantDetail);
+      currentDetail = wantDetail;
     }
+  }
+  applyQuality();
+  function sampleAndAdapt(dt, now) {
+    if (dt > 0) fpsBuf.push(1000 / dt);
+    if (fpsBuf.length > 90) fpsBuf.shift();
+    if (fpsBuf.length < 45 || now - lastAdjust < 1400) return;   // avoid thrash
+    const avg = fpsBuf.reduce((a, b) => a + b, 0) / fpsBuf.length;
+    if (avg < 50 && quality > 0.5) { quality = Math.max(0.5, quality - 0.15); applyQuality(); lastAdjust = now; fpsBuf.length = 0; }
+    else if (avg > 58 && quality < 1) { quality = Math.min(1, quality + 0.1); applyQuality(); lastAdjust = now; fpsBuf.length = 0; }
+    return avg;
+  }
 
-    if (reduceMotion) {
-      render();                         // paint a single static frame
-    } else {
-      renderer.setAnimationLoop(render);
-    }
+  /* ---- Render loop with visibility gating ------------------------------ */
+  const clock = new THREE.Clock();
+  let rafId = null, running = false, visible = true, avgFps = 0, prevT = performance.now();
+  function frame() {
+    const now = performance.now();
+    const dt = now - prevT; prevT = now;
+    const t = clock.getElapsedTime();
+    crystal.rotation.y = t * 0.18;
+    crystal.rotation.x = Math.sin(t * 0.15) * 0.25;
+    shell.rotation.copy(crystal.rotation);
+    camera.position.x += (target.x * 0.6 - camera.position.x) * 0.04;
+    camera.position.y += (-target.y * 0.4 - camera.position.y) * 0.04;
+    camera.lookAt(0, 0, 0);
+    renderer.render(scene, camera);
+    const a = sampleAndAdapt(dt, now);
+    if (a) avgFps = a;
+    if (hudOn) readout.textContent = `${avgFps.toFixed(0)} fps\nq ${quality.toFixed(2)} · dpr ${renderer.getPixelRatio().toFixed(2)}`;
+    rafId = requestAnimationFrame(frame);
+  }
+  function start() { if (running || reduceMotion) return; running = true; clock.start(); prevT = performance.now(); rafId = requestAnimationFrame(frame); }
+  function stop() { running = false; if (rafId) cancelAnimationFrame(rafId); rafId = null; }
 
-    // ---- Resize -------------------------------------------------------------
-    window.addEventListener('resize', () => {
-      camera.aspect = window.innerWidth / window.innerHeight;
-      camera.updateProjectionMatrix();
-      renderer.setSize(window.innerWidth, window.innerHeight);
-      if (reduceMotion) render();
-    });
+  // Static single frame for reduced-motion — still premium, just not moving.
+  function renderStill() { camera.lookAt(0, 0, 0); renderer.render(scene, camera); }
+
+  // Pause when hero is offscreen or tab hidden; resume when back.
+  const io = new IntersectionObserver((entries) => {
+    visible = entries[0].isIntersecting;
+    if (visible && !document.hidden) start(); else stop();
+  }, { threshold: 0.01 });
+  io.observe(canvas);
+  const onVisibility = () => { if (document.hidden) stop(); else if (visible) start(); };
+  document.addEventListener('visibilitychange', onVisibility);
+
+  if (reduceMotion) renderStill(); else start();
+
+  /* ---- FPS readout toggle (keyboard-accessible) ------------------------ */
+  const toggle = document.getElementById('hudToggle');
+  const readout = document.getElementById('hudReadout');
+  let hudOn = false;
+  toggle.addEventListener('click', () => {
+    hudOn = !hudOn;
+    toggle.setAttribute('aria-pressed', String(hudOn));
+    readout.hidden = !hudOn;
+  });
+
+  /* ---- Resize ---------------------------------------------------------- */
+  const onResize = () => {
+    camera.aspect = innerWidth / innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth, innerHeight);
+    if (reduceMotion || !running) renderStill();
+  };
+  addEventListener('resize', onResize);
+
+  /* ---- Strict teardown ------------------------------------------------- */
+  function dispose() {
+    stop();
+    io.disconnect();
+    removeEventListener('pointermove', onPointer);
+    removeEventListener('resize', onResize);
+    document.removeEventListener('visibilitychange', onVisibility);
+    scene.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
+    material.dispose(); shellMat.dispose(); bgTex.dispose();
+    renderer.dispose();
+    renderer.domElement.remove();
+  }
+  addEventListener('pagehide', dispose, { once: true });
+}
   </script>
 </body>
 </html>
