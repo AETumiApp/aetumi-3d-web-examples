@@ -91,10 +91,9 @@ The 3D layer supports the page. It should not swallow the page.
 
 ## Repository status
 
-Documentation-first. The example backlog is organized around distinct user and business intents so future code remains reusable instead of becoming one giant showcase.
+Active. Runnable, production-oriented examples now live in [`examples/`](./examples/) — reviewed for performance (adaptive quality), accessibility, reduced-motion and non-WebGL fallbacks, and clean resource disposal. The set is refined and extended as new patterns land.
 
 See [examples/README.md](./examples/README.md).
-
 ## About AETumi
 
 AETumi helps designers, developers and agencies build cinematic, interactive 3D websites with modern web technologies and AI coding assistants.
