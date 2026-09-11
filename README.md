@@ -4,6 +4,18 @@ A curated technical reference for **interactive 3D websites and browser-based ex
 
 **AETumi is an AI-native 3D web platform for production-ready Three.js and WebGL websites, Next.js and React components, 3D scenes, AI prompts, and MCP workflows for AI coding assistants.**
 
+## What this helps teams build
+
+The broadest implementation layer in the AETumi network — connecting real industry use cases to concrete 3D web patterns, so a project starts from a production-oriented direction rather than a blank canvas.
+
+**Customer outcome.** Businesses, agencies and designers see what can actually be built for their context — product, campaign, showcase or launch — with the engineering responsibilities handled, not skipped.
+
+**Where it fits.** The industry patterns mapped below — ecommerce and product, luxury/fashion/creative, automotive and industrial, architecture and real estate, and SaaS/technology.
+
+**What you customize.** Content, art direction, assets and interaction on top of the reference architecture, with the semantic/SEO layer kept intact.
+
+**AI-assisted adaptation.** Give a coding assistant a pattern plus a brief through the [AETumi MCP](https://aetumi.app/mcp/) to adapt it to a specific project.
+
 ## What this repository covers
 
 This repository is the broadest implementation layer in the AETumi GitHub network. It connects industry use cases to concrete 3D web patterns instead of treating every project as the same floating-object demo with a new logo slapped on top.
